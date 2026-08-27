@@ -1,4 +1,5 @@
 #include <gccore.h>
+#include <malloc.h>
 #include <wiiuse/wpad.h>
 #include <math.h>
 #include <stdio.h>
