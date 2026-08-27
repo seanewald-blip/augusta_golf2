@@ -16,12 +16,18 @@ jobs:
       - name: Checkout project
         uses: actions/checkout@v4
 
+      - name: Install Wii development libraries
+        run: |
+          dkp-pacman -Syy --noconfirm
+          dkp-pacman -S --needed --noconfirm wii-dev
+
       - name: Verify Wii toolchain
         run: |
           echo "DEVKITPRO=$DEVKITPRO"
           echo "DEVKITPPC=$DEVKITPPC"
-          ls -la /opt/devkitpro/libogc/include/gccore.h
-          ls -la /opt/devkitpro/devkitPPC/wii_rules
+          test -f /opt/devkitpro/libogc/include/gccore.h
+          test -f /opt/devkitpro/devkitPPC/wii_rules
+          ls -l /opt/devkitpro/libogc/include/gccore.h
 
       - name: Prepare source layout
         run: |
@@ -33,31 +39,41 @@ jobs:
 
       - name: Build Wii executable
         run: |
+          export DEVKITPRO=/opt/devkitpro
+          export DEVKITPPC=/opt/devkitpro/devkitPPC
           make clean || true
           make
 
-      - name: Find compiled DOL
+      - name: Find and package compiled DOL
         run: |
-          echo "Compiled files:"
-          find . -maxdepth 3 -type f \( -name "*.dol" -o -name "*.elf" \) -print
-
-          DOL="$(find . -maxdepth 3 -type f -name "*.dol" | head -n 1)"
+          DOL="$(find . -type f -name "*.dol" | head -n 1)"
 
           if [ -z "$DOL" ]; then
-            echo "ERROR: No .dol file was generated"
+            echo "ERROR: No .dol file generated"
+            find . -maxdepth 3 -type f | sort
             exit 1
           fi
 
+          echo "Found Wii executable: $DOL"
+
           mkdir -p SD_CARD/apps/augusta_golf/data
-          cp "$DOL" SD_CARD/apps/augusta_golf/boot.dol
-          cp meta.xml SD_CARD/apps/augusta_golf/meta.xml
-          cp icon.png SD_CARD/apps/augusta_golf/icon.png
-          cp course_2026.csv SD_CARD/apps/augusta_golf/data/course_2026.csv
+
+          cp "$DOL" \
+            SD_CARD/apps/augusta_golf/boot.dol
+
+          cp meta.xml \
+            SD_CARD/apps/augusta_golf/meta.xml
+
+          cp icon.png \
+            SD_CARD/apps/augusta_golf/icon.png
+
+          cp course_2026.csv \
+            SD_CARD/apps/augusta_golf/data/course_2026.csv
 
           sha256sum SD_CARD/apps/augusta_golf/boot.dol \
             > SD_CARD/apps/augusta_golf/boot.dol.sha256
 
-      - name: Package SD card
+      - name: Create SD-card ZIP
         run: |
           cd SD_CARD
           zip -r ../augusta_golf_SD_CARD.zip .
