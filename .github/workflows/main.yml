@@ -2,8 +2,6 @@ name: Build Augusta Golf for Wii-vWii
 
 on:
   workflow_dispatch:
-  push:
-    branches: [ "main" ]
 
 jobs:
   build:
@@ -21,13 +19,15 @@ jobs:
           dkp-pacman -Syy --noconfirm
           dkp-pacman -S --needed --noconfirm wii-dev
 
-      - name: Verify Wii toolchain
+      - name: Diagnose libogc paths
         run: |
           echo "DEVKITPRO=$DEVKITPRO"
           echo "DEVKITPPC=$DEVKITPPC"
-          test -f /opt/devkitpro/libogc/include/gccore.h
-          test -f /opt/devkitpro/devkitPPC/wii_rules
-          ls -l /opt/devkitpro/libogc/include/gccore.h
+          echo "Looking for gccore.h..."
+          find /opt/devkitpro -name gccore.h -print
+          echo "Checking expected locations..."
+          ls -la /opt/devkitpro/libogc/include/gccore.h || true
+          ls -la /opt/devkitpro/devkitPPC/wii_rules || true
 
       - name: Prepare source layout
         run: |
@@ -41,34 +41,30 @@ jobs:
         run: |
           export DEVKITPRO=/opt/devkitpro
           export DEVKITPPC=/opt/devkitpro/devkitPPC
+          echo "Starting Wii build..."
           make clean || true
           make
 
       - name: Find and package compiled DOL
         run: |
+          echo "Searching for compiled Wii executable..."
+          find . -type f \( -name "*.dol" -o -name "*.elf" \) -print
+
           DOL="$(find . -type f -name "*.dol" | head -n 1)"
 
           if [ -z "$DOL" ]; then
-            echo "ERROR: No .dol file generated"
-            find . -maxdepth 3 -type f | sort
+            echo "ERROR: No DOL file was generated."
             exit 1
           fi
 
-          echo "Found Wii executable: $DOL"
+          echo "Found: $DOL"
 
           mkdir -p SD_CARD/apps/augusta_golf/data
 
-          cp "$DOL" \
-            SD_CARD/apps/augusta_golf/boot.dol
-
-          cp meta.xml \
-            SD_CARD/apps/augusta_golf/meta.xml
-
-          cp icon.png \
-            SD_CARD/apps/augusta_golf/icon.png
-
-          cp course_2026.csv \
-            SD_CARD/apps/augusta_golf/data/course_2026.csv
+          cp "$DOL" SD_CARD/apps/augusta_golf/boot.dol
+          cp meta.xml SD_CARD/apps/augusta_golf/meta.xml
+          cp icon.png SD_CARD/apps/augusta_golf/icon.png
+          cp course_2026.csv SD_CARD/apps/augusta_golf/data/course_2026.csv
 
           sha256sum SD_CARD/apps/augusta_golf/boot.dol \
             > SD_CARD/apps/augusta_golf/boot.dol.sha256
