@@ -26,6 +26,8 @@ export DEPSDIR := $(CURDIR)/$(BUILD)
 
 CFILES := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
 
+export LD := $(CC)
+
 export OFILES := $(CFILES:.c=.o)
 
 export INCLUDE := \
