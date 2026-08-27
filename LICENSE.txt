@@ -1,0 +1,3 @@
+Source code in this package: CC0-1.0 / public-domain dedication where permitted.
+Course names, event names, trademarks and third-party geographic data remain the property of their respective owners.
+OpenStreetMap-derived geometry, if added later, requires ODbL attribution and compliance. USGS 3DEP data is generally public domain; verify metadata for the specific downloaded product.

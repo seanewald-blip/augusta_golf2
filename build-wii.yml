@@ -1,0 +1,61 @@
+name: Build Augusta Golf for Wii / vWii
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main", "master" ]
+    paths:
+      - "source/**"
+      - "data/**"
+      - "apps/**"
+      - "Makefile"
+      - ".github/workflows/build-wii.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkitppc:latest
+
+    steps:
+      - name: Check out project
+        uses: actions/checkout@v4
+
+      - name: Show toolchain
+        shell: bash
+        run: |
+          echo "DEVKITPRO=${DEVKITPRO:-unset}"
+          echo "DEVKITPPC=${DEVKITPPC:-unset}"
+          powerpc-eabi-gcc --version
+
+      - name: Build Wii executable and SD package
+        shell: bash
+        run: |
+          make clean
+          make package
+          test -s dist/apps/augusta_golf/boot.dol
+          test -s dist/apps/augusta_golf/meta.xml
+          test -s dist/apps/augusta_golf/icon.png
+          test -s dist/apps/augusta_golf/data/course_2026.csv
+
+      - name: Create copy-to-SD ZIP
+        shell: bash
+        run: |
+          cd dist
+          zip -r ../augusta_golf_SD_CARD.zip apps
+          cd ..
+          sha256sum dist/apps/augusta_golf/boot.dol > boot.dol.sha256
+          ls -lh dist/apps/augusta_golf/boot.dol augusta_golf_SD_CARD.zip
+
+      - name: Upload SD-card-ready build
+        uses: actions/upload-artifact@v4
+        with:
+          name: augusta-golf-vwii-sd-ready
+          path: |
+            augusta_golf_SD_CARD.zip
+            dist/apps/augusta_golf/**
+            boot.dol.sha256
+          if-no-files-found: error

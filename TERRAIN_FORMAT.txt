@@ -1,0 +1,6 @@
+terrain.bin (optional future embed)
+256 x 256 samples
+unsigned 16-bit big-endian
+centimeters above local DEM minimum
+row-major, north/south orientation recorded by the crop pipeline
+A sidecar .txt records base_elevation_m and max_elevation_m.
