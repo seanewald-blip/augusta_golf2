@@ -1,0 +1,45 @@
+name: Build Augusta Golf for Wii-vWii
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkitppc:latest
+
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@v4
+
+      - name: Prepare source layout
+        run: |
+          mkdir -p source
+          cp main.c source/main.c
+          cp course.c source/course.c
+          cp course.h source/course.h
+
+      - name: Build Wii executable
+        run: |
+          make
+          test -f augusta_golf.dol
+          mkdir -p SD_CARD/apps/augusta_golf/data
+          cp augusta_golf.dol SD_CARD/apps/augusta_golf/boot.dol
+          cp meta.xml SD_CARD/apps/augusta_golf/meta.xml
+          cp icon.png SD_CARD/apps/augusta_golf/icon.png
+          cp course_2026.csv SD_CARD/apps/augusta_golf/data/course_2026.csv
+          sha256sum SD_CARD/apps/augusta_golf/boot.dol > SD_CARD/apps/augusta_golf/boot.dol.sha256
+
+      - name: Package SD card
+        run: |
+          cd SD_CARD
+          zip -r ../augusta_golf_SD_CARD.zip .
+
+      - name: Upload playable SD package
+        uses: actions/upload-artifact@v4
+        with:
+          name: augusta-golf-vwii-sd-ready
+          path: augusta_golf_SD_CARD.zip
