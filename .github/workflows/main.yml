@@ -1,4 +1,4 @@
-name: Build Augusta Hole 13 3D Demo
+name: Build Augusta Driving Range v0.6
 
 on:
   workflow_dispatch:
@@ -6,55 +6,39 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     container:
       image: devkitpro/devkitppc:latest
-
     steps:
       - name: Checkout project
         uses: actions/checkout@v4
-
       - name: Install Wii development libraries
         run: |
           dkp-pacman -Syy --noconfirm
           dkp-pacman -S --needed --noconfirm wii-dev
-
       - name: Prepare source layout
         run: |
           rm -rf source
           mkdir -p source
           cp main.c source/main.c
-
       - name: Build Wii executable
         run: |
           export DEVKITPRO=/opt/devkitpro
           export DEVKITPPC=/opt/devkitpro/devkitPPC
           make clean || true
           make
-
-      - name: Package Hole 13 demo
+      - name: Package range demo
         run: |
-          DOL="$(find . -type f -name "*.dol" | head -n 1)"
-
-          if [ -z "$DOL" ]; then
-            echo "ERROR: No .dol file was generated."
-            exit 1
-          fi
-
-          mkdir -p SD_CARD/apps/augusta_golf_demo
-
-          cp "$DOL" SD_CARD/apps/augusta_golf_demo/boot.dol
-          cp meta.xml SD_CARD/apps/augusta_golf_demo/meta.xml
-          cp icon.png SD_CARD/apps/augusta_golf_demo/icon.png
-
-          sha256sum SD_CARD/apps/augusta_golf_demo/boot.dol \
-            > SD_CARD/apps/augusta_golf_demo/boot.dol.sha256
-
+          DOL="$(find . -type f -name '*.dol' | head -n 1)"
+          if [ -z "$DOL" ]; then echo "ERROR: No .dol generated"; exit 1; fi
+          mkdir -p SD_CARD/apps/augusta_golf_range
+          cp "$DOL" SD_CARD/apps/augusta_golf_range/boot.dol
+          cp meta.xml SD_CARD/apps/augusta_golf_range/meta.xml
+          cp icon.png SD_CARD/apps/augusta_golf_range/icon.png
+          sha256sum SD_CARD/apps/augusta_golf_range/boot.dol > SD_CARD/apps/augusta_golf_range/boot.dol.sha256
           cd SD_CARD
-          zip -r ../augusta_golf_HOLE13_3D_SD_CARD.zip .
-
-      - name: Upload playable Hole 13 demo
+          zip -r ../augusta_golf_RANGE_v0_6_SD_CARD.zip .
+      - name: Upload playable range demo
         uses: actions/upload-artifact@v4
         with:
-          name: augusta-golf-hole13-3d-demo
-          path: augusta_golf_HOLE13_3D_SD_CARD.zip
+          name: augusta-golf-range-v0-6
+          path: augusta_golf_RANGE_v0_6_SD_CARD.zip
