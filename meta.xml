@@ -1,10 +1,9 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <app version="1">
-  <name>Resort-Feel Golf Lab v0.7</name>
-  <coder>OpenAI prototype</coder>
-  <version>0.7</version>
+  <name>Resort Golf Hole 1 Lab</name>
+  <coder>OpenAI + user hardware test</coder>
+  <version>0.8</version>
   <release_date>20260830</release_date>
-  <short_description>MotionPlus golf swing and 3D range lab</short_description>
-  <long_description>Original Wii homebrew golf research prototype. Power is driven primarily by backswing depth; Wii MotionPlus wrist rotation influences club face and shot curve. Includes rounded golfer/ball geometry, smoother terrain, improved camera behavior and ball flight physics. B resets stance, hold A to address and swing, D-pad aims/changes clubs, + resets shot, HOME exits.</long_description>
-  <ahb_access/>
+  <short_description>Reference-driven Hole 1 golf prototype</short_description>
+  <long_description>Original Wii homebrew implementing a Wii Sports Resort-inspired Hole 1 interaction study using MotionPlus. No Nintendo code or assets are included.</long_description>
 </app>

@@ -4,7 +4,7 @@ $(error "Please set DEVKITPPC")
 endif
 include $(DEVKITPPC)/wii_rules
 
-TARGET := augusta_golf_range
+TARGET := resort_hole1
 BUILD := build
 SOURCES := source
 INCLUDES := source
