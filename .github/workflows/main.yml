@@ -1,4 +1,4 @@
-name: Build Augusta Driving Range v0.6
+name: Build Resort-Feel Golf Lab v0.7
 
 on:
   workflow_dispatch:
@@ -26,19 +26,22 @@ jobs:
           export DEVKITPPC=/opt/devkitpro/devkitPPC
           make clean || true
           make
-      - name: Package range demo
+      - name: Package v0.7
         run: |
-          DOL="$(find . -type f -name '*.dol' | head -n 1)"
-          if [ -z "$DOL" ]; then echo "ERROR: No .dol generated"; exit 1; fi
-          mkdir -p SD_CARD/apps/augusta_golf_range
-          cp "$DOL" SD_CARD/apps/augusta_golf_range/boot.dol
-          cp meta.xml SD_CARD/apps/augusta_golf_range/meta.xml
-          cp icon.png SD_CARD/apps/augusta_golf_range/icon.png
-          sha256sum SD_CARD/apps/augusta_golf_range/boot.dol > SD_CARD/apps/augusta_golf_range/boot.dol.sha256
+          DOL="$(find . -type f -name "*.dol" | head -n 1)"
+          if [ -z "$DOL" ]; then
+            echo "ERROR: No .dol file generated"
+            exit 1
+          fi
+          mkdir -p SD_CARD/apps/resort_golf_lab
+          cp "$DOL" SD_CARD/apps/resort_golf_lab/boot.dol
+          cp meta.xml SD_CARD/apps/resort_golf_lab/meta.xml
+          cp icon.png SD_CARD/apps/resort_golf_lab/icon.png
+          sha256sum SD_CARD/apps/resort_golf_lab/boot.dol > SD_CARD/apps/resort_golf_lab/boot.dol.sha256
           cd SD_CARD
-          zip -r ../augusta_golf_RANGE_v0_6_SD_CARD.zip .
-      - name: Upload playable range demo
+          zip -r ../resort_golf_lab_v0_7_SD_CARD.zip .
+      - name: Upload playable v0.7
         uses: actions/upload-artifact@v4
         with:
-          name: augusta-golf-range-v0-6
-          path: augusta_golf_RANGE_v0_6_SD_CARD.zip
+          name: resort-golf-lab-v0-7
+          path: resort_golf_lab_v0_7_SD_CARD.zip
