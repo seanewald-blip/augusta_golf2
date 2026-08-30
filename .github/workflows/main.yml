@@ -1,8 +1,6 @@
-name: Build Resort-Feel Golf Lab v0.7
-
+name: Build Resort Hole 1 v0.8
 on:
   workflow_dispatch:
-
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -26,22 +24,18 @@ jobs:
           export DEVKITPPC=/opt/devkitpro/devkitPPC
           make clean || true
           make
-      - name: Package v0.7
+      - name: Package SD card app
         run: |
-          DOL="$(find . -type f -name "*.dol" | head -n 1)"
-          if [ -z "$DOL" ]; then
-            echo "ERROR: No .dol file generated"
-            exit 1
-          fi
-          mkdir -p SD_CARD/apps/resort_golf_lab
-          cp "$DOL" SD_CARD/apps/resort_golf_lab/boot.dol
-          cp meta.xml SD_CARD/apps/resort_golf_lab/meta.xml
-          cp icon.png SD_CARD/apps/resort_golf_lab/icon.png
-          sha256sum SD_CARD/apps/resort_golf_lab/boot.dol > SD_CARD/apps/resort_golf_lab/boot.dol.sha256
-          cd SD_CARD
-          zip -r ../resort_golf_lab_v0_7_SD_CARD.zip .
-      - name: Upload playable v0.7
+          DOL="$(find . -type f -name '*.dol' | head -n 1)"
+          test -n "$DOL"
+          mkdir -p SD_CARD/apps/resort_hole1
+          cp "$DOL" SD_CARD/apps/resort_hole1/boot.dol
+          cp meta.xml SD_CARD/apps/resort_hole1/meta.xml
+          cp icon.png SD_CARD/apps/resort_hole1/icon.png
+          sha256sum SD_CARD/apps/resort_hole1/boot.dol > SD_CARD/apps/resort_hole1/boot.dol.sha256
+          cd SD_CARD && zip -r ../resort_hole1_v0_8_SD_CARD.zip .
+      - name: Upload playable build
         uses: actions/upload-artifact@v4
         with:
-          name: resort-golf-lab-v0-7
-          path: resort_golf_lab_v0_7_SD_CARD.zip
+          name: resort-hole1-v0-8
+          path: resort_hole1_v0_8_SD_CARD.zip
