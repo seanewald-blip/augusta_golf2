@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <app version="1">
-  <name>Augusta Golf Homebrew</name>
-  <coder>Original homebrew project</coder>
-  <version>0.4.0</version>
-  <release_date>20260818</release_date>
-  <short_description>18-hole motion-control golf prototype</short_description>
-  <long_description>Original Wii homebrew golf game with an Augusta-inspired 18-hole routing model, Wii Remote swing input, hazards, lies, putting, scoring and terrain pipeline. Not affiliated with Nintendo, Augusta National Golf Club, or the Masters Tournament.</long_description>
+  <name>Augusta Golf 3D Demo</name>
+  <coder>OpenAI prototype</coder>
+  <version>0.5.0</version>
+  <release_date>20260828</release_date>
+  <short_description>Hole 13 3D vertical slice</short_description>
+  <long_description>Original Wii homebrew golf prototype inspired by classic motion-control golf. Hole 13 is a hand-authored approximation using original geometry; no Nintendo or Masters assets are included. B: arm swing, release B to hit. D-pad left/right aim, up/down club. + resets hole. HOME exits.</long_description>
 </app>
