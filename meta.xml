@@ -1,9 +1,10 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <app version="1">
-  <name>Augusta Golf - Range v0.6</name>
+  <name>Resort-Feel Golf Lab v0.7</name>
   <coder>OpenAI prototype</coder>
-  <version>0.6.0</version>
+  <version>0.7</version>
   <release_date>20260830</release_date>
-  <short_description>3D graphics and Wiimote swing test</short_description>
-  <long_description>Driving-range vertical slice for the Augusta Golf homebrew project. Fine terrain mesh, perspective fog, targets, trees, visible golfer and live Wiimote-driven club motion. Hold B and move the Wii Remote to preview the swing; release B to strike. D-pad left/right aims, up/down changes club, + resets, HOME exits.</long_description>
+  <short_description>MotionPlus golf swing and 3D range lab</short_description>
+  <long_description>Original Wii homebrew golf research prototype. Power is driven primarily by backswing depth; Wii MotionPlus wrist rotation influences club face and shot curve. Includes rounded golfer/ball geometry, smoother terrain, improved camera behavior and ball flight physics. B resets stance, hold A to address and swing, D-pad aims/changes clubs, + resets shot, HOME exits.</long_description>
+  <ahb_access/>
 </app>
