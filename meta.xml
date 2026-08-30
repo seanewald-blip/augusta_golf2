@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <app version="1">
-  <name>Augusta Golf 3D Demo</name>
+  <name>Augusta Golf - Range v0.6</name>
   <coder>OpenAI prototype</coder>
-  <version>0.5.0</version>
-  <release_date>20260828</release_date>
-  <short_description>Hole 13 3D vertical slice</short_description>
-  <long_description>Original Wii homebrew golf prototype inspired by classic motion-control golf. Hole 13 is a hand-authored approximation using original geometry; no Nintendo or Masters assets are included. B: arm swing, release B to hit. D-pad left/right aim, up/down club. + resets hole. HOME exits.</long_description>
+  <version>0.6.0</version>
+  <release_date>20260830</release_date>
+  <short_description>3D graphics and Wiimote swing test</short_description>
+  <long_description>Driving-range vertical slice for the Augusta Golf homebrew project. Fine terrain mesh, perspective fog, targets, trees, visible golfer and live Wiimote-driven club motion. Hold B and move the Wii Remote to preview the swing; release B to strike. D-pad left/right aims, up/down changes club, + resets, HOME exits.</long_description>
 </app>

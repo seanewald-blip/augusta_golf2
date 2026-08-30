@@ -8,276 +8,324 @@
 #define FIFO_SIZE (256*1024)
 #define PI 3.14159265358979323846f
 #define DEG2RAD(x) ((x)*PI/180.0f)
-#define HOLE_YARDS 510.0f
+#define RAD2DEG(x) ((x)*180.0f/PI)
+#define RANGE_Z_MAX 340.0f
 #define GRAVITY 10.72f
+#define DT (1.0f/60.0f)
 
-typedef enum { LIE_TEE, LIE_FAIRWAY, LIE_ROUGH, LIE_GREEN, LIE_BUNKER, LIE_WATER } Lie;
+typedef struct { float x,y,z; } V3;
 typedef struct { const char *name; float carry, launch; } Club;
 static const Club CLUBS[] = {
-    {"Driver",285,12},{"3 Wood",240,14},{"5 Iron",190,19},{"7 Iron",160,23},
-    {"9 Iron",130,29},{"Wedge",95,38},{"Putter",36,0}
+    {"Driver",275.0f,12.0f}, {"3 Wood",235.0f,14.0f}, {"5 Iron",185.0f,20.0f},
+    {"7 Iron",155.0f,24.0f}, {"Wedge",100.0f,36.0f}
 };
 #define CLUB_COUNT ((int)(sizeof(CLUBS)/sizeof(CLUBS[0])))
 
 typedef struct {
-    float z, x, y;          /* z = yards toward green, x = lateral yards, y = elevation yards */
-    float vz, vx, vy;
+    float x,y,z;
+    float vx,vy,vz;
     float aim;
-    float safe_z, safe_x;
-    int club, strokes, moving, flying, holed;
-    Lie lie;
-} Game;
+    int club;
+    int moving;
+    int flying;
+    int shots;
+    float last_carry;
+} Ball;
 
-typedef struct { int armed, frames; float peak_g, start_roll; } Swing;
-
-typedef enum { CAM_PLAYER, CAM_BALL, CAM_PUTT } CameraMode;
+typedef struct {
+    int armed;
+    int frames;
+    float start_pitch;
+    float start_roll;
+    float live_angle;
+    float live_face;
+    float peak_g;
+    float power_preview;
+    float impact_flash;
+} Swing;
 
 static GXRModeObj *rmode;
 static void *xfb[2];
 static void *fifo;
-static u32 fb = 0;
+static u32 fb=0;
 static Mtx44 perspective, ortho;
 static Mtx view;
 
-static float clampf(float v,float a,float b){ return v<a?a:(v>b?b:v); }
-static float lerpf(float a,float b,float t){ return a+(b-a)*t; }
+static float clampf(float v,float lo,float hi){return v<lo?lo:(v>hi?hi:v);}
+static float lerpf(float a,float b,float t){return a+(b-a)*t;}
+static V3 v3(float x,float y,float z){V3 v={x,y,z};return v;}
+static V3 vadd(V3 a,V3 b){return v3(a.x+b.x,a.y+b.y,a.z+b.z);}
+static V3 vsub(V3 a,V3 b){return v3(a.x-b.x,a.y-b.y,a.z-b.z);}
+static V3 vmul(V3 a,float s){return v3(a.x*s,a.y*s,a.z*s);}
+static float vlen(V3 a){return sqrtf(a.x*a.x+a.y*a.y+a.z*a.z);}
+static V3 vnorm(V3 a){float l=vlen(a);return l>0.0001f?vmul(a,1.0f/l):v3(0,0,0);}
 
-/* Approximate, hand-authored Hole 13 geometry. This is intentionally original data, not copied map artwork. */
-static float center_x(float z){
-    float s=clampf(z/HOLE_YARDS,0,1);
-    if(s<0.22f) return lerpf(0,-7,s/0.22f);
-    if(s<0.52f) return lerpf(-7,-41,(s-0.22f)/0.30f);
-    if(s<0.78f) return lerpf(-41,-67,(s-0.52f)/0.26f);
-    return lerpf(-67,-61,(s-0.78f)/0.22f);
-}
-static float fair_half(float z){
-    float s=clampf(z/HOLE_YARDS,0,1);
-    if(s<0.10f) return 15;
-    if(s<0.50f) return 21;
-    if(s<0.78f) return 18;
-    return 13;
-}
+/* Smooth, original driving-range terrain: deliberately not presented as survey-grade Augusta data. */
 static float terrain_h(float z,float x){
-    float s=clampf(z/HOLE_YARDS,0,1);
-    /* descent toward creek, then rise into green complex; ~55 ft total relief impression */
-    float base = -2.0f*s - 7.0f*expf(-powf((s-0.71f)/0.17f,2.0f)) + 2.1f*expf(-powf((s-0.98f)/0.09f,2.0f));
-    float cross = 0.015f*(x-center_x(z));
-    float rolls = 0.55f*sinf(z*0.031f) + 0.30f*sinf(z*0.071f + x*0.04f);
-    return base + cross + rolls;
+    float long_roll = 1.7f*sinf(z*0.021f) + 0.85f*sinf(z*0.047f+0.7f);
+    float cross = 0.016f*x + 0.42f*sinf(x*0.055f + z*0.012f);
+    float tee = 1.4f*expf(-((z-5.0f)*(z-5.0f))/260.0f);
+    float landing = -1.0f*expf(-((z-220.0f)*(z-220.0f))/2200.0f);
+    return long_roll + cross + tee + landing;
 }
-static int in_creek(float z,float x){
-    /* diagonal Rae's-Creek-like crossing/frontage near green, stylized */
-    float cz = 414.0f + (x+55.0f)*0.34f;
-    return fabsf(z-cz)<5.5f && x>-105 && x<-25;
-}
+
+static float fair_center(float z){return -3.5f*sinf(z*0.0105f);}
+static float fair_half(float z){return 27.0f + 5.0f*sinf(z*0.017f+1.0f);}
+static int in_fairway(float z,float x){return fabsf(x-fair_center(z))<fair_half(z);}
 static int in_bunker(float z,float x){
-    float dx=x+48, dz=z-468;
-    if((dx*dx)/(12*12)+(dz*dz)/(18*18)<1) return 1;
-    dx=x+78; dz=z-487;
-    if((dx*dx)/(10*10)+(dz*dz)/(13*13)<1) return 1;
+    float dx=x-27.0f,dz=z-118.0f;
+    if(dx*dx/(14.0f*14.0f)+dz*dz/(22.0f*22.0f)<1.0f)return 1;
+    dx=x+31.0f;dz=z-205.0f;
+    if(dx*dx/(12.0f*12.0f)+dz*dz/(19.0f*19.0f)<1.0f)return 1;
     return 0;
 }
-static int on_green(float z,float x){
-    float dx=x+61, dz=z-506;
-    return (dx*dx)/(24*24)+(dz*dz)/(18*18)<1;
-}
-static Lie lie_at(float z,float x){
-    if(in_creek(z,x)) return LIE_WATER;
-    if(in_bunker(z,x)) return LIE_BUNKER;
-    if(on_green(z,x)) return LIE_GREEN;
-    if(z<18 && fabsf(x-center_x(z))<10) return LIE_TEE;
-    if(fabsf(x-center_x(z))<fair_half(z)) return LIE_FAIRWAY;
-    return LIE_ROUGH;
+static int in_water(float z,float x){
+    if(z>250.0f && z<288.0f){float edge=-35.0f+0.08f*(z-250.0f);if(x<edge)return 1;}
+    return 0;
 }
 
-static GXColor grass_color(float z,float x){
-    Lie l=lie_at(z,x);
-    if(l==LIE_WATER) return (GXColor){48,112,155,255};
-    if(l==LIE_BUNKER) return (GXColor){207,188,133,255};
-    if(l==LIE_GREEN) return (GXColor){81,156,73,255};
-    if(l==LIE_FAIRWAY){
-        int stripe=((int)(z/12.0f))&1;
-        return stripe ? (GXColor){61,132,55,255} : (GXColor){70,145,62,255};
-    }
-    int mottled=(((int)(z/18))^((int)((x+140)/18)))&1;
-    return mottled ? (GXColor){32,91,39,255} : (GXColor){37,101,43,255};
+static GXColor mixc(GXColor a,GXColor b,float t){
+    t=clampf(t,0,1);GXColor c;
+    c.r=(u8)clampf(lerpf(a.r,b.r,t),0,255);c.g=(u8)clampf(lerpf(a.g,b.g,t),0,255);
+    c.b=(u8)clampf(lerpf(a.b,b.b,t),0,255);c.a=255;return c;
+}
+static GXColor ground_color(float z,float x){
+    if(in_water(z,x)) return (GXColor){55,116,145,255};
+    if(in_bunker(z,x)) return (GXColor){205,187,137,255};
+    GXColor fairA={67,135,60,255}, fairB={75,146,66,255};
+    GXColor roughA={38,91,44,255}, roughB={45,103,48,255};
+    float stripe=0.5f+0.5f*sinf(z*0.34f);
+    GXColor base=in_fairway(z,x)?mixc(fairA,fairB,stripe):mixc(roughA,roughB,0.5f+0.5f*sinf(z*.10f+x*.075f));
+    float hx=(terrain_h(z,x+1.2f)-terrain_h(z,x-1.2f))/2.4f;
+    float hz=(terrain_h(z+1.2f,x)-terrain_h(z-1.2f,x))/2.4f;
+    float light=clampf(0.55f-0.36f*hx-0.25f*hz,0.15f,0.9f);
+    GXColor shadow={18,45,25,255}, sun={112,174,91,255};
+    return mixc(shadow,mixc(base,sun,0.22f),light);
 }
 
-static void gx_color(GXColor c){ GX_Color4u8(c.r,c.g,c.b,c.a); }
-static void vtx(float x,float y,float z,GXColor c){ GX_Position3f32(x,y,z); gx_color(c); }
+static void gx_color(GXColor c){GX_Color4u8(c.r,c.g,c.b,c.a);}
+static void vtx(float x,float y,float z,GXColor c){GX_Position3f32(x,y,z);gx_color(c);}
 
-static void draw_world_quad(float x0,float z0,float x1,float z1,GXColor c){
-    GX_Begin(GX_QUADS,GX_VTXFMT0,4);
-    vtx(x0,terrain_h(z0,x0),z0,c); vtx(x1,terrain_h(z0,x1),z0,c);
-    vtx(x1,terrain_h(z1,x1),z1,c); vtx(x0,terrain_h(z1,x0),z1,c);
+static void draw_box(float cx,float cy,float cz,float sx,float sy,float sz,GXColor c){
+    float x0=cx-sx*.5f,x1=cx+sx*.5f,y0=cy,y1=cy+sy,z0=cz-sz*.5f,z1=cz+sz*.5f;
+    GX_Begin(GX_QUADS,GX_VTXFMT0,24);
+    vtx(x0,y0,z0,c);vtx(x1,y0,z0,c);vtx(x1,y1,z0,c);vtx(x0,y1,z0,c);
+    vtx(x1,y0,z1,c);vtx(x0,y0,z1,c);vtx(x0,y1,z1,c);vtx(x1,y1,z1,c);
+    vtx(x0,y0,z1,c);vtx(x0,y0,z0,c);vtx(x0,y1,z0,c);vtx(x0,y1,z1,c);
+    vtx(x1,y0,z0,c);vtx(x1,y0,z1,c);vtx(x1,y1,z1,c);vtx(x1,y1,z0,c);
+    vtx(x0,y1,z0,c);vtx(x1,y1,z0,c);vtx(x1,y1,z1,c);vtx(x0,y1,z1,c);
+    vtx(x0,y0,z1,c);vtx(x1,y0,z1,c);vtx(x1,y0,z0,c);vtx(x0,y0,z0,c);
     GX_End();
 }
+
+static void draw_beam(V3 a,V3 b,float width,GXColor c){
+    V3 d=vnorm(vsub(b,a));
+    V3 side=vnorm(v3(d.z*0.9f,0.15f,-d.x*0.9f));
+    if(vlen(side)<0.1f) side=v3(1,0,0);
+    side=vmul(side,width);
+    V3 p0=vadd(a,side),p1=vsub(a,side),p2=vsub(b,side),p3=vadd(b,side);
+    GX_Begin(GX_QUADS,GX_VTXFMT0,4);
+    vtx(p0.x,p0.y,p0.z,c);vtx(p1.x,p1.y,p1.z,c);vtx(p2.x,p2.y,p2.z,c);vtx(p3.x,p3.y,p3.z,c);GX_End();
+}
+
 static void draw_terrain(void){
-    const float xmin=-145, xmax=70, dz=10, dx=10;
-    for(float z=0; z<545; z+=dz){
-        for(float x=xmin; x<xmax; x+=dx){
-            GXColor c=grass_color(z+dz*.5f,x+dx*.5f);
-            GX_Begin(GX_QUADS,GX_VTXFMT0,4);
-            vtx(x,terrain_h(z,x),z,c); vtx(x+dx,terrain_h(z,x+dx),z,c);
-            vtx(x+dx,terrain_h(z+dz,x+dx),z+dz,c); vtx(x,terrain_h(z+dz,x),z+dz,c);
-            GX_End();
+    const float xmin=-72.0f,xmax=72.0f,dx=4.0f,dz=4.0f;
+    for(float z=0;z<RANGE_Z_MAX;z+=dz){
+        GX_Begin(GX_TRIANGLESTRIP,GX_VTXFMT0,(u16)(((xmax-xmin)/dx+1)*2));
+        for(float x=xmin;x<=xmax+0.1f;x+=dx){
+            GXColor c0=ground_color(z,x),c1=ground_color(z+dz,x);
+            vtx(x,terrain_h(z,x),z,c0);vtx(x,terrain_h(z+dz,x),z+dz,c1);
         }
+        GX_End();
     }
 }
-static void draw_tree(float x,float z,float scale){
-    float y=terrain_h(z,x);
-    GXColor trunk={79,56,34,255}, dark={23,69,31,255}, mid={33,91,38,255};
-    /* low-poly crossed tree, readable from moving camera */
-    GX_Begin(GX_QUADS,GX_VTXFMT0,4);
-    vtx(x-.8f,y,z,x<0?trunk:trunk); vtx(x+.8f,y,z,trunk); vtx(x+.8f,y+7*scale,z,trunk); vtx(x-.8f,y+7*scale,z,trunk);
-    GX_End();
-    float w=5.5f*scale,h=12*scale;
-    GX_Begin(GX_TRIANGLES,GX_VTXFMT0,6);
-    vtx(x-w,y+3,z,dark); vtx(x+w,y+3,z,dark); vtx(x,y+h,z,mid);
-    vtx(x,y+3,z-w,dark); vtx(x,y+3,z+w,dark); vtx(x,y+h,z,mid);
-    GX_End();
+
+static void draw_shadow(float x,float z,float rx,float rz){
+    float y=terrain_h(z,x)+0.025f;GXColor s={20,38,21,125};
+    GX_SetBlendMode(GX_BM_BLEND,GX_BL_SRCALPHA,GX_BL_INVSRCALPHA,GX_LO_CLEAR);
+    GX_Begin(GX_TRIANGLEFAN,GX_VTXFMT0,14);vtx(x,y,z,s);
+    for(int i=0;i<=12;i++){float a=2*PI*i/12.0f;vtx(x+cosf(a)*rx,y,z+sinf(a)*rz,s);}GX_End();
+    GX_SetBlendMode(GX_BM_NONE,GX_BL_ONE,GX_BL_ZERO,GX_LO_CLEAR);
 }
-static void draw_trees(void){
-    for(int i=0;i<38;i++){
-        float z=22+i*13.2f;
-        float c=center_x(z), w=fair_half(z);
-        float wig=5.0f*sinf(i*1.7f);
-        draw_tree(c-w-18-wig,z,0.85f+(i%4)*.08f);
-        if(i%2==0) draw_tree(c+w+21+wig,z+5,0.9f+(i%3)*.09f);
+
+static void draw_tree(float x,float z,float s){
+    float y=terrain_h(z,x);GXColor trunk={86,61,37,255};
+    GXColor dark={24,67,31,255},mid={38,92,42,255},lite={50,108,47,255};
+    draw_shadow(x,z,4.0f*s,2.0f*s);
+    draw_box(x,y,z,1.0f*s,6.2f*s,1.0f*s,trunk);
+    float r=4.3f*s;
+    for(int level=0;level<3;level++){
+        float yy=y+4.5f*s+level*2.8f*s, rr=r*(1.0f-level*.14f);GXColor c=level==0?dark:(level==1?mid:lite);
+        GX_Begin(GX_TRIANGLES,GX_VTXFMT0,24);
+        for(int i=0;i<8;i++){float a0=2*PI*i/8.0f,a1=2*PI*(i+1)/8.0f;
+            vtx(x,yy+5.5f*s,z,c);vtx(x+cosf(a0)*rr,yy,z+sinf(a0)*rr,c);vtx(x+cosf(a1)*rr,yy,z+sinf(a1)*rr,c);}
+        GX_End();
     }
 }
-static void draw_flag(void){
-    float x=-61,z=506,y=terrain_h(z,x);
-    GXColor white={245,245,240,255}, flag={238,224,80,255};
-    GX_Begin(GX_LINES,GX_VTXFMT0,2); vtx(x,y,z,white); vtx(x,y+6.8f,z,white); GX_End();
-    GX_Begin(GX_TRIANGLES,GX_VTXFMT0,3); vtx(x,y+6.8f,z,flag); vtx(x+5,y+5.8f,z,flag); vtx(x,y+4.9f,z,flag); GX_End();
+
+static void draw_scenery(void){
+    for(int i=0;i<25;i++){
+        float z=20.0f+i*13.0f;float wig=5.0f*sinf(i*1.37f);
+        draw_tree(-51.0f-wig,z,(0.82f+(i%4)*.07f));
+        if(i%2==0)draw_tree(52.0f+wig,z+5.0f,(0.86f+(i%3)*.08f));
+    }
+    for(int i=0;i<8;i++){float z=65.0f+i*35.0f;draw_tree(-66.0f,z+8,0.72f);draw_tree(66.0f,z-4,0.76f);}
 }
-static void draw_ball(const Game *g){
-    GXColor white={250,250,246,255}; float r=.55f;
-    /* tiny octahedron */
+
+static void draw_target(float z,float x,int yards){
+    float y=terrain_h(z,x);GXColor white={242,242,235,255}, red={205,62,49,255}, pole={220,222,219,255};
+    GX_Begin(GX_LINES,GX_VTXFMT0,2);vtx(x,y,z,pole);vtx(x,y+7.0f,z,pole);GX_End();
+    GX_Begin(GX_TRIANGLES,GX_VTXFMT0,3);vtx(x,y+7,z,red);vtx(x+4.0f,y+6.0f,z,red);vtx(x,y+5.2f,z,white);GX_End();
+    float r=(yards==100?7.0f:(yards==150?8.0f:(yards==200?9.0f:10.0f)));
+    GX_Begin(GX_LINESTRIP,GX_VTXFMT0,25);for(int i=0;i<=24;i++){float a=2*PI*i/24.0f;float xx=x+cosf(a)*r,zz=z+sinf(a)*r;vtx(xx,terrain_h(zz,xx)+.08f,zz,white);}GX_End();
+}
+
+static void draw_targets(void){draw_target(100,0,100);draw_target(150,-9,150);draw_target(200,8,200);draw_target(250,-5,250);}
+
+static void draw_ball(const Ball *b){
+    GXColor w={250,250,247,255};float r=.42f;
     GX_Begin(GX_TRIANGLES,GX_VTXFMT0,24);
-    vtx(g->x,g->y+r,g->z,white);vtx(g->x-r,g->y,g->z,white);vtx(g->x,g->y,g->z+r,white);
-    vtx(g->x,g->y+r,g->z,white);vtx(g->x,g->y,g->z+r,white);vtx(g->x+r,g->y,g->z,white);
-    vtx(g->x,g->y+r,g->z,white);vtx(g->x+r,g->y,g->z,white);vtx(g->x,g->y,g->z-r,white);
-    vtx(g->x,g->y+r,g->z,white);vtx(g->x,g->y,g->z-r,white);vtx(g->x-r,g->y,g->z,white);
-    vtx(g->x,g->y-r,g->z,white);vtx(g->x,g->y,g->z+r,white);vtx(g->x-r,g->y,g->z,white);
-    vtx(g->x,g->y-r,g->z,white);vtx(g->x+r,g->y,g->z,white);vtx(g->x,g->y,g->z+r,white);
-    vtx(g->x,g->y-r,g->z,white);vtx(g->x,g->y,g->z-r,white);vtx(g->x+r,g->y,g->z,white);
-    vtx(g->x,g->y-r,g->z,white);vtx(g->x-r,g->y,g->z,white);vtx(g->x,g->y,g->z-r,white);
-    GX_End();
-}
-static void draw_golfer(const Game *g){
-    if(g->moving) return;
-    float x=g->x+4.0f, z=g->z-2.0f, y=terrain_h(z,x);
-    GXColor pants={236,237,230,255}, shirt={42,102,62,255}, skin={205,164,119,255}, club={170,174,175,255};
-    draw_world_quad(x-1,z-1,x+1,z+1,pants);
-    GX_Begin(GX_QUADS,GX_VTXFMT0,4); vtx(x-1.4f,y+2,z,shirt);vtx(x+1.4f,y+2,z,shirt);vtx(x+1.1f,y+6,z,shirt);vtx(x-1.1f,y+6,z,shirt);GX_End();
-    GX_Begin(GX_QUADS,GX_VTXFMT0,4);vtx(x-.8f,y+6,z,skin);vtx(x+.8f,y+6,z,skin);vtx(x+.7f,y+7.6f,z,skin);vtx(x-.7f,y+7.6f,z,skin);GX_End();
-    GX_Begin(GX_LINES,GX_VTXFMT0,2);vtx(x+1,y+4.4f,z,club);vtx(g->x+.4f,g->y+.2f,g->z+.2f,club);GX_End();
+    vtx(b->x,b->y+r,b->z,w);vtx(b->x-r,b->y,b->z,w);vtx(b->x,b->y,b->z+r,w);
+    vtx(b->x,b->y+r,b->z,w);vtx(b->x,b->y,b->z+r,w);vtx(b->x+r,b->y,b->z,w);
+    vtx(b->x,b->y+r,b->z,w);vtx(b->x+r,b->y,b->z,w);vtx(b->x,b->y,b->z-r,w);
+    vtx(b->x,b->y+r,b->z,w);vtx(b->x,b->y,b->z-r,w);vtx(b->x-r,b->y,b->z,w);
+    vtx(b->x,b->y-r,b->z,w);vtx(b->x,b->y,b->z+r,w);vtx(b->x-r,b->y,b->z,w);
+    vtx(b->x,b->y-r,b->z,w);vtx(b->x+r,b->y,b->z,w);vtx(b->x,b->y,b->z+r,w);
+    vtx(b->x,b->y-r,b->z,w);vtx(b->x,b->y,b->z-r,w);vtx(b->x+r,b->y,b->z,w);
+    vtx(b->x,b->y-r,b->z,w);vtx(b->x-r,b->y,b->z,w);vtx(b->x,b->y,b->z-r,w);GX_End();
 }
 
-static void set_camera(const Game *g, CameraMode mode){
-    guVector eye, up={0,1,0}, target;
-    if(mode==CAM_BALL){
-        eye=(guVector){g->x+18.0f, g->y+14.0f, g->z-32.0f};
-        target=(guVector){g->x,g->y+1.0f,g->z+32.0f};
-    }else if(mode==CAM_PUTT){
-        eye=(guVector){g->x+8.0f,g->y+5.0f,g->z-15.0f};
-        target=(guVector){-61,terrain_h(506,-61)+.4f,506};
+static void draw_golfer(const Ball *b,const Swing *sw){
+    if(b->moving)return;
+    float gx=b->x+3.7f,gz=b->z-.8f,gy=terrain_h(gz,gx);
+    GXColor shoe={35,39,37,255},pants={226,225,214,255},shirt={36,92,62,255},skin={210,170,125,255};
+    GXColor club={185,190,192,255},head={94,99,101,255};
+    draw_shadow(gx,gz,2.1f,1.1f);
+    draw_box(gx-.55f,gy,gz,.75f,2.8f,.72f,pants);draw_box(gx+.55f,gy,gz,.75f,2.8f,.72f,pants);
+    draw_box(gx-.55f,gy-.05f,gz-.15f,.9f,.35f,1.2f,shoe);draw_box(gx+.55f,gy-.05f,gz-.15f,.9f,.35f,1.2f,shoe);
+    draw_box(gx,gy+2.65f,gz,2.4f,3.05f,1.18f,shirt);draw_box(gx,gy+5.75f,gz,.95f,1.25f,.95f,skin);
+
+    float a=DEG2RAD(sw->armed?sw->live_angle:-14.0f);
+    float face=DEG2RAD(sw->armed?sw->live_face:0.0f);
+    V3 shoulder=v3(gx-.45f,gy+4.75f,gz+.05f);
+    V3 hands=v3(gx-1.0f+0.55f*sinf(a),gy+3.65f+0.70f*cosf(a),gz-.25f-0.45f*sinf(a));
+    draw_beam(shoulder,hands,.18f,skin);draw_beam(v3(gx+.55f,gy+4.7f,gz),hands,.18f,skin);
+    V3 dir=v3(sinf(face)*.20f,-cosf(a),sinf(a));dir=vnorm(dir);
+    V3 end=vadd(hands,vmul(dir,5.8f));
+    draw_beam(hands,end,.075f,club);
+    draw_box(end.x-.18f,end.y-.12f,end.z,.72f,.30f,.30f,head);
+}
+
+static void set_camera(const Ball *b){
+    guVector up={0,1,0},eye,target;
+    if(b->moving){
+        float speed=sqrtf(b->vx*b->vx+b->vz*b->vz);float back=clampf(22.0f+speed*.18f,22.0f,40.0f);
+        V3 d=vnorm(v3(b->vx,0,b->vz));
+        eye=(guVector){b->x-d.x*back+7.0f,b->y+12.0f,b->z-d.z*back};
+        target=(guVector){b->x+d.x*28.0f,b->y+1.0f,b->z+d.z*28.0f};
     }else{
-        float sx=sinf(g->aim), cz=cosf(g->aim);
-        eye=(guVector){g->x-10.0f*sx+5.0f,g->y+8.0f,g->z-16.0f*cz};
-        target=(guVector){g->x+65.0f*sx,g->y+3.0f,g->z+65.0f*cz};
+        float s=sinf(b->aim),c=cosf(b->aim);
+        eye=(guVector){b->x+8.6f-7.0f*s,terrain_h(b->z-11,b->x+8.6f)+7.4f,b->z-11.5f*c};
+        float tz=b->z+72.0f*c,tx=b->x+72.0f*s;
+        target=(guVector){tx,terrain_h(tz,tx)+2.4f,tz};
     }
-    guLookAt(view,&eye,&up,&target);
-    GX_LoadPosMtxImm(view,GX_PNMTX0);
+    guLookAt(view,&eye,&up,&target);GX_LoadPosMtxImm(view,GX_PNMTX0);
 }
 
-static void init_video(void){
-    VIDEO_Init(); WPAD_Init();
-    rmode=VIDEO_GetPreferredMode(NULL);
-    xfb[0]=MEM_K0_TO_K1(SYS_AllocateFramebuffer(rmode));
-    xfb[1]=MEM_K0_TO_K1(SYS_AllocateFramebuffer(rmode));
-    VIDEO_Configure(rmode); VIDEO_SetNextFramebuffer(xfb[0]); VIDEO_SetBlack(FALSE); VIDEO_Flush(); VIDEO_WaitVSync();
-    fifo=memalign(32,FIFO_SIZE); memset(fifo,0,FIFO_SIZE); GX_Init(fifo,FIFO_SIZE);
-    GX_SetCopyClear((GXColor){111,174,211,255},0x00ffffff);
-    GX_SetViewport(0,0,rmode->fbWidth,rmode->efbHeight,0,1);
-    f32 ys=GX_GetYScaleFactor(rmode->efbHeight,rmode->xfbHeight); u16 xh=GX_SetDispCopyYScale(ys);
-    GX_SetScissor(0,0,rmode->fbWidth,rmode->efbHeight); GX_SetDispCopySrc(0,0,rmode->fbWidth,rmode->efbHeight); GX_SetDispCopyDst(rmode->fbWidth,xh);
-    GX_SetCopyFilter(rmode->aa,rmode->sample_pattern,GX_TRUE,rmode->vfilter);
-    GX_SetCullMode(GX_CULL_NONE); GX_SetZMode(GX_TRUE,GX_LEQUAL,GX_TRUE);
-    GX_SetVtxDesc(GX_VA_POS,GX_DIRECT); GX_SetVtxDesc(GX_VA_CLR0,GX_DIRECT);
-    GX_SetVtxAttrFmt(GX_VTXFMT0,GX_VA_POS,GX_POS_XYZ,GX_F32,0); GX_SetVtxAttrFmt(GX_VTXFMT0,GX_VA_CLR0,GX_CLR_RGBA,GX_RGBA8,0);
-    GX_SetNumChans(1); GX_SetNumTexGens(0); GX_SetTevOp(GX_TEVSTAGE0,GX_PASSCLR); GX_SetTevOrder(GX_TEVSTAGE0,GX_TEXCOORDNULL,GX_TEXMAP_NULL,GX_COLOR0A0);
-    guPerspective(perspective,52.0f,4.0f/3.0f,0.5f,900.0f); GX_LoadProjectionMtx(perspective,GX_PERSPECTIVE);
-    guOrtho(ortho,0,480,0,640,0,300);
-    WPAD_SetDataFormat(WPAD_CHAN_0,WPAD_FMT_BTNS_ACC_IR);
-}
-
-static void reset(Game *g){ memset(g,0,sizeof(*g)); g->z=4; g->x=center_x(g->z); g->y=terrain_h(g->z,g->x)+.55f; g->club=0; g->lie=LIE_TEE; g->safe_z=g->z; g->safe_x=g->x; }
-static float lie_power(Lie l){ return l==LIE_ROUGH?.87f:l==LIE_BUNKER?.62f:1.0f; }
-static float friction(Lie l){ return l==LIE_GREEN?.9925f:l==LIE_FAIRWAY?.985f:l==LIE_BUNKER?.94f:.972f; }
-static void launch(Game *g,float power,float face){
-    float target=CLUBS[g->club].carry*power*lie_power(g->lie), dir=g->aim+DEG2RAD(face)*.65f;
-    if(g->club==CLUB_COUNT-1 || g->lie==LIE_GREEN){ float sp=target*.52f; g->vz=cosf(dir)*sp; g->vx=sinf(dir)*sp; g->vy=0; g->flying=0; }
-    else { float a=DEG2RAD(CLUBS[g->club].launch); float sp=sqrtf(target*GRAVITY/fmaxf(sinf(2*a),.18f))*1.05f; g->vz=cosf(dir)*sp*cosf(a); g->vx=sinf(dir)*sp*cosf(a); g->vy=sp*sinf(a); g->flying=1; }
-    g->moving=1; g->strokes++;
-}
-static void update(Game *g){
-    if(!g->moving) return; float dt=1.0f/60.0f;
-    if(g->flying){
-        g->z+=g->vz*dt; g->x+=g->vx*dt; g->y+=g->vy*dt; g->vy-=GRAVITY*dt; g->vz*=.999f; g->vx*=.999f;
-        float ground=terrain_h(g->z,g->x)+.55f;
-        if(g->y<=ground){ g->y=ground; g->lie=lie_at(g->z,g->x); if(fabsf(g->vy)>2.4f && g->lie!=LIE_BUNKER){g->vy=-g->vy*.23f;g->vz*=.76f;g->vx*=.76f;}else{g->flying=0;g->vy=0;} }
-    }else{
-        g->z+=g->vz*dt; g->x+=g->vx*dt; g->lie=lie_at(g->z,g->x); g->y=terrain_h(g->z,g->x)+.55f;
-        float f=friction(g->lie); g->vz*=f; g->vx*=f;
-        if(g->lie==LIE_GREEN){ g->vx += .012f*dt*60; g->vz -= .006f*dt*60; }
-        if(hypotf(g->vz,g->vx)<.28f){g->vz=g->vx=0;g->moving=0;}
-    }
-    if(g->lie==LIE_WATER && !g->flying){ g->z=g->safe_z;g->x=g->safe_x;g->y=terrain_h(g->z,g->x)+.55f;g->moving=0;g->strokes++;g->lie=lie_at(g->z,g->x); }
-    else if(!g->flying && g->lie!=LIE_WATER){g->safe_z=g->z;g->safe_x=g->x;}
-    if(!g->moving && on_green(g->z,g->x) && hypotf(g->z-506,g->x+61)<1.2f){g->holed=1;}
-}
-
-/* Seven-segment HUD; no font or Nintendo assets required. */
 static const unsigned char SEG[10]={0x3f,0x06,0x5b,0x4f,0x66,0x6d,0x7d,0x07,0x7f,0x6f};
 static void hud_quad(float x1,float y1,float x2,float y2,GXColor c){GX_Begin(GX_QUADS,GX_VTXFMT0,4);vtx(x1,y1,0,c);vtx(x2,y1,0,c);vtx(x2,y2,0,c);vtx(x1,y2,0,c);GX_End();}
 static void digit(int d,float x,float y,float s,GXColor c){if(d<0||d>9)return;unsigned m=SEG[d];float t=2*s,w=8*s,h=14*s;if(m&1)hud_quad(x+t,y,x+w-t,y+t,c);if(m&2)hud_quad(x+w-t,y+t,x+w,y+h/2-t/2,c);if(m&4)hud_quad(x+w-t,y+h/2+t/2,x+w,y+h-t,c);if(m&8)hud_quad(x+t,y+h-t,x+w-t,y+h,c);if(m&16)hud_quad(x,y+h/2+t/2,x+t,y+h-t,c);if(m&32)hud_quad(x,y+t,x+t,y+h/2-t/2,c);if(m&64)hud_quad(x+t,y+h/2-t/2,x+w-t,y+h/2+t/2,c);}
 static void number(int n,float x,float y,float s,GXColor c){if(n<0){hud_quad(x,y+6*s,x+6*s,y+8*s,c);x+=9*s;n=-n;}int a=n/100,b=(n/10)%10,d=n%10;if(a){digit(a,x,y,s,c);x+=10*s;}if(a||b){digit(b,x,y,s,c);x+=10*s;}digit(d,x,y,s,c);}
-static void draw_hud(const Game*g,const Swing*sw){
-    GX_LoadProjectionMtx(ortho,GX_ORTHOGRAPHIC); Mtx m; guMtxIdentity(m); GX_LoadPosMtxImm(m,GX_PNMTX0); GX_SetZMode(GX_FALSE,GX_ALWAYS,GX_FALSE);
-    GXColor panel={8,22,12,205},white={245,245,240,255},gold={240,220,80,255};
-    hud_quad(0,0,640,58,panel); number(13,15,12,1.5f,gold); number(5,76,12,1.5f,white); number(510,125,12,1.5f,white); number(g->strokes,230,12,1.5f,white); number(g->club+1,285,12,1.5f,white); number((int)fmaxf(0,506-g->z),370,12,1.5f,white);
-    if(sw->armed){float p=clampf((sw->peak_g-1.05f)/2.8f,0,1);hud_quad(90,438,550,469,panel);hud_quad(98,447,98+444*p,460,gold);}
-    if(g->holed){hud_quad(220,185,420,295,panel);number(g->strokes,292,213,3.0f,gold);}
-    GX_SetZMode(GX_TRUE,GX_LEQUAL,GX_TRUE); GX_LoadProjectionMtx(perspective,GX_PERSPECTIVE);
+
+static void draw_hud(const Ball *b,const Swing *sw){
+    GX_LoadProjectionMtx(ortho,GX_ORTHOGRAPHIC);Mtx m;guMtxIdentity(m);GX_LoadPosMtxImm(m,GX_PNMTX0);GX_SetZMode(GX_FALSE,GX_ALWAYS,GX_FALSE);
+    GXColor panel={7,18,11,210},white={245,245,240,255},gold={239,216,72,255},green={80,192,91,255},red={220,78,59,255};
+    hud_quad(0,0,640,55,panel);
+    number(b->club+1,18,12,1.5f,gold);number((int)CLUBS[b->club].carry,70,12,1.5f,white);number(b->shots,170,12,1.5f,white);
+    if(b->last_carry>1)number((int)b->last_carry,235,12,1.5f,green);
+    if(sw->armed){
+        hud_quad(85,425,555,472,panel);
+        float p=clampf(sw->power_preview,0,1);hud_quad(96,438,96+300*p,451,gold);
+        float t=clampf((sw->live_angle+90.0f)/180.0f,0,1);hud_quad(96+300*t-3,456,96+300*t+3,468,white);
+        float f=clampf(sw->live_face/25.0f,-1,1);float mid=475;hud_quad(mid,438,mid+f*65,451,fabsf(f)<.25f?green:red);
+    }
+    if(sw->impact_flash>0){GXColor flash={255,238,120,(u8)clampf(sw->impact_flash*255,0,255)};hud_quad(0,55,640,65,flash);}
+    GX_SetZMode(GX_TRUE,GX_LEQUAL,GX_TRUE);GX_LoadProjectionMtx(perspective,GX_PERSPECTIVE);
 }
 
-static void render(const Game*g,const Swing*sw){
-    CameraMode cm = g->moving?CAM_BALL:(g->lie==LIE_GREEN?CAM_PUTT:CAM_PLAYER);
-    GX_LoadProjectionMtx(perspective,GX_PERSPECTIVE); GX_SetZMode(GX_TRUE,GX_LEQUAL,GX_TRUE); set_camera(g,cm);
-    draw_terrain(); draw_trees(); draw_flag(); draw_golfer(g); draw_ball(g); draw_hud(g,sw);
+static void init_video(void){
+    VIDEO_Init();WPAD_Init();rmode=VIDEO_GetPreferredMode(NULL);
+    xfb[0]=MEM_K0_TO_K1(SYS_AllocateFramebuffer(rmode));xfb[1]=MEM_K0_TO_K1(SYS_AllocateFramebuffer(rmode));
+    VIDEO_Configure(rmode);VIDEO_SetNextFramebuffer(xfb[0]);VIDEO_SetBlack(FALSE);VIDEO_Flush();VIDEO_WaitVSync();
+    fifo=memalign(32,FIFO_SIZE);memset(fifo,0,FIFO_SIZE);GX_Init(fifo,FIFO_SIZE);
+    GX_SetCopyClear((GXColor){118,177,211,255},0x00ffffff);
+    GX_SetViewport(0,0,rmode->fbWidth,rmode->efbHeight,0,1);f32 ys=GX_GetYScaleFactor(rmode->efbHeight,rmode->xfbHeight);u16 xh=GX_SetDispCopyYScale(ys);
+    GX_SetScissor(0,0,rmode->fbWidth,rmode->efbHeight);GX_SetDispCopySrc(0,0,rmode->fbWidth,rmode->efbHeight);GX_SetDispCopyDst(rmode->fbWidth,xh);
+    GX_SetCopyFilter(rmode->aa,rmode->sample_pattern,GX_TRUE,rmode->vfilter);GX_SetCullMode(GX_CULL_NONE);GX_SetZMode(GX_TRUE,GX_LEQUAL,GX_TRUE);
+    GX_SetBlendMode(GX_BM_NONE,GX_BL_ONE,GX_BL_ZERO,GX_LO_CLEAR);
+    GX_SetVtxDesc(GX_VA_POS,GX_DIRECT);GX_SetVtxDesc(GX_VA_CLR0,GX_DIRECT);
+    GX_SetVtxAttrFmt(GX_VTXFMT0,GX_VA_POS,GX_POS_XYZ,GX_F32,0);GX_SetVtxAttrFmt(GX_VTXFMT0,GX_VA_CLR0,GX_CLR_RGBA,GX_RGBA8,0);
+    GX_SetNumChans(1);GX_SetNumTexGens(0);GX_SetTevOp(GX_TEVSTAGE0,GX_PASSCLR);GX_SetTevOrder(GX_TEVSTAGE0,GX_TEXCOORDNULL,GX_TEXMAP_NULL,GX_COLOR0A0);
+    GX_SetFog(GX_FOG_LIN,100.0f,390.0f,0.5f,700.0f,(GXColor){118,177,211,255});
+    guPerspective(perspective,55.0f,4.0f/3.0f,0.4f,700.0f);GX_LoadProjectionMtx(perspective,GX_PERSPECTIVE);guOrtho(ortho,0,480,0,640,0,300);
+    WPAD_SetDataFormat(WPAD_CHAN_0,WPAD_FMT_BTNS_ACC_IR);
+}
+
+static void reset_ball(Ball *b){memset(b,0,sizeof(*b));b->z=7.0f;b->x=0;b->y=terrain_h(b->z,b->x)+.45f;b->club=0;}
+
+static void launch_ball(Ball *b,float power,float face_deg){
+    float a=DEG2RAD(CLUBS[b->club].launch);float carry=CLUBS[b->club].carry*power;
+    float speed=sqrtf(fmaxf(carry*GRAVITY/fmaxf(sinf(2*a),.16f),1.0f));
+    float dir=b->aim+DEG2RAD(face_deg)*.55f;
+    b->vx=sinf(dir)*speed*cosf(a);b->vz=cosf(dir)*speed*cosf(a);b->vy=sinf(a)*speed;
+    b->moving=1;b->flying=1;b->shots++;b->last_carry=0;
+}
+
+static void update_ball(Ball *b){
+    if(!b->moving)return;
+    if(b->flying){
+        b->x+=b->vx*DT;b->z+=b->vz*DT;b->y+=b->vy*DT;b->vy-=GRAVITY*DT;b->vx*=.9992f;b->vz*=.9992f;
+        float ground=terrain_h(b->z,b->x)+.45f;
+        if(b->y<=ground){b->y=ground;if(fabsf(b->vy)>2.1f){b->vy=-b->vy*.24f;b->vx*=.77f;b->vz*=.77f;}else{b->flying=0;b->vy=0;}}
+    }else{
+        b->x+=b->vx*DT;b->z+=b->vz*DT;b->y=terrain_h(b->z,b->x)+.45f;
+        float f=in_bunker(b->z,b->x)?.945f:(in_fairway(b->z,b->x)?.985f:.972f);b->vx*=f;b->vz*=f;
+        if(hypotf(b->vx,b->vz)<.25f){b->moving=0;b->vx=b->vz=0;b->last_carry=hypotf(b->x,b->z-7.0f);}
+    }
+    if(b->z>RANGE_Z_MAX+35||fabsf(b->x)>110){b->moving=0;b->last_carry=hypotf(b->x,b->z-7.0f);}
+}
+
+static void update_swing(Swing *sw,u32 down,u32 held,Ball *b){
+    struct orient_t o;struct gforce_t gf;WPAD_Orientation(0,&o);WPAD_GForce(0,&gf);
+    if((down&WPAD_BUTTON_B)&&!b->moving){sw->armed=1;sw->frames=0;sw->start_pitch=o.pitch;sw->start_roll=o.roll;sw->live_angle=-14;sw->live_face=0;sw->peak_g=0;sw->power_preview=0;}
+    if(sw->armed){
+        float dp=o.pitch-sw->start_pitch;float dr=o.roll-sw->start_roll;
+        sw->live_angle=clampf(-14.0f-dp*1.85f,-105.0f,85.0f);sw->live_face=clampf(dr*.65f,-25.0f,25.0f);
+        float mag=sqrtf(gf.x*gf.x+gf.y*gf.y+gf.z*gf.z);if(mag>sw->peak_g)sw->peak_g=mag;
+        sw->power_preview=clampf((sw->peak_g-1.05f)/2.9f,0,1);sw->frames++;
+        if(!(held&WPAD_BUTTON_B)&&sw->frames>4){float power=clampf(sw->power_preview,.12f,1.0f);launch_ball(b,power,sw->live_face);sw->armed=0;sw->impact_flash=1.0f;WPAD_Rumble(0,1);}
+    }
+    if(sw->impact_flash>0)sw->impact_flash*=.84f;
+}
+
+static void render(const Ball *b,const Swing *sw){
+    GX_LoadProjectionMtx(perspective,GX_PERSPECTIVE);GX_SetZMode(GX_TRUE,GX_LEQUAL,GX_TRUE);set_camera(b);
+    draw_terrain();draw_targets();draw_scenery();draw_golfer(b,sw);draw_ball(b);draw_hud(b,sw);
 }
 
 int main(int argc,char **argv){
-    (void)argc;(void)argv; init_video(); Game g; Swing sw={0}; reset(&g);
+    (void)argc;(void)argv;init_video();Ball b;Swing sw={0};reset_ball(&b);
     while(SYS_MainLoop()){
-        WPAD_ScanPads(); u32 down=WPAD_ButtonsDown(0), held=WPAD_ButtonsHeld(0);
-        if(down&WPAD_BUTTON_HOME) break;
-        if(down&WPAD_BUTTON_PLUS) reset(&g);
-        if(!g.moving && !g.holed){
-            if(held&WPAD_BUTTON_LEFT) g.aim-=.015f;
-            if(held&WPAD_BUTTON_RIGHT) g.aim+=.015f;
-            if(down&WPAD_BUTTON_UP && g.club>0) g.club--;
-            if(down&WPAD_BUTTON_DOWN && g.club<CLUB_COUNT-1) g.club++;
-            if(g.lie==LIE_GREEN) g.club=CLUB_COUNT-1;
-            if(down&WPAD_BUTTON_B){struct orient_t o;WPAD_Orientation(0,&o);sw.armed=1;sw.peak_g=0;sw.start_roll=o.roll;sw.frames=0;}
-            if(sw.armed){struct gforce_t gf;struct orient_t o;WPAD_GForce(0,&gf);WPAD_Orientation(0,&o);float mag=sqrtf(gf.x*gf.x+gf.y*gf.y+gf.z*gf.z);if(mag>sw.peak_g)sw.peak_g=mag;sw.frames++;if(!(held&WPAD_BUTTON_B)&&sw.frames>3){float p=clampf((sw.peak_g-1.05f)/2.8f,.08f,1);float face=clampf((o.roll-sw.start_roll)*.25f,-14,14);launch(&g,p,face);sw.armed=0;WPAD_Rumble(0,1);}}
+        WPAD_ScanPads();u32 down=WPAD_ButtonsDown(0),held=WPAD_ButtonsHeld(0);
+        if(down&WPAD_BUTTON_HOME)break;
+        if(down&WPAD_BUTTON_PLUS){reset_ball(&b);memset(&sw,0,sizeof(sw));}
+        if(!b.moving){
+            if(held&WPAD_BUTTON_LEFT)b.aim-=.012f;if(held&WPAD_BUTTON_RIGHT)b.aim+=.012f;
+            if((down&WPAD_BUTTON_UP)&&b.club>0)b.club--;if((down&WPAD_BUTTON_DOWN)&&b.club<CLUB_COUNT-1)b.club++;
         }
-        update(&g); if(g.moving) WPAD_Rumble(0,0);
-        GX_SetViewport(0,0,rmode->fbWidth,rmode->efbHeight,0,1); GX_InvVtxCache(); render(&g,&sw); GX_DrawDone();
-        fb^=1; GX_CopyDisp(xfb[fb],GX_TRUE); VIDEO_SetNextFramebuffer(xfb[fb]); VIDEO_Flush(); VIDEO_WaitVSync();
+        update_swing(&sw,down,held,&b);update_ball(&b);if(b.moving&&sw.impact_flash<.1f)WPAD_Rumble(0,0);
+        GX_SetViewport(0,0,rmode->fbWidth,rmode->efbHeight,0,1);GX_InvVtxCache();render(&b,&sw);GX_DrawDone();
+        fb^=1;GX_CopyDisp(xfb[fb],GX_TRUE);VIDEO_SetNextFramebuffer(xfb[fb]);VIDEO_Flush();VIDEO_WaitVSync();
     }
     return 0;
 }
